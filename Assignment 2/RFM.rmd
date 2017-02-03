@@ -1,0 +1,186 @@
+# Tuango - RFM Analysis for Mobile App Push Messaging
+
+* Name: Vidya Chockalingam
+* Gitlab id: vichocka 
+* Gitlab username: rsm-vichocka
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+Loading data
+
+```{r}
+## make all required libraries available
+suppressPackageStartupMessages(library(radiant))
+
+## finding the path to the class dropbox folder
+fp <- file.path(find_dropbox(),"MGTA455-2017")
+
+## loading the data
+## DO NOT change the next line!
+## Data must be loaded from Dropbox/MGTA455-2017/data
+loadr(file.path(fp, "data/tuango.rds"))
+```
+
+## Question answers
+
+### Question 1
+
+The percentage of buyers who responded to the promotions is 3.09%.
+```{r}
+#1
+response_rate <- sum(tuango$buyer == "yes")/nrow(tuango)
+response_rate
+```
+
+### Question 2
+The average amount spent by customers who got at least one order is 202.356 RMB
+```{r}
+#2
+avg_amnt_spent <- sum(tuango$ordersize)/sum(tuango$buyer == "yes")
+avg_amnt_spent
+```
+
+### Question 3 & 4
+
+As expected, the highest response rate is from quintile for all three - recency, frequency and monetary.
+```{r}
+#3 and 4
+tuango$rec_iq <-  xtile(tuango$recency, 5)
+visualize(dataset = "tuango", xvar = "rec_iq", yvar = "buyer", type = "bar", custom = TRUE) +  ylab("Proportion of buyer = 'yes'") + xlab("Recency quintiles (rec_iq)") + theme(legend.position = "none")
+
+tuango$freq_iq <-  xtile(tuango$frequency, 5, rev=TRUE)
+visualize(dataset = "tuango", xvar = "freq_iq", yvar = "buyer", type = "bar", custom = TRUE) +  ylab("Proportion of buyer = 'yes'") + xlab("Frequency quintiles (freq_iq)") + theme(legend.position = "none")
+
+tuango$mon_iq <-  xtile(tuango$monetary, 5, rev=TRUE)
+visualize(dataset = "tuango", xvar = "mon_iq", yvar = "buyer", type = "bar", custom = TRUE) +  ylab("Proportion of buyer = 'yes'") + xlab("Monetary quintiles (mon_iq)") + theme(legend.position = "none")
+
+```
+### Question 5
+Please find below the plots for tha average amount spent by the buyers who responded to the promotions by quintiles.
+```{r}
+#5
+tuango_responded <- tuango[tuango$buyer=="yes",]
+by_recency <- group_by(tuango_responded,rec_iq)
+avg_amnt_recency <- summarize(by_recency,avg_amnt_recency_quantile=mean(ordersize))
+visualize(dataset = "avg_amnt_recency", xvar = "rec_iq", yvar = "avg_amnt_recency_quantile", type = "bar", custom = TRUE) +  ylab("Amount spent by proportion of buyer = 'yes'") + xlab("Recency quintiles (rec_iq)") + theme(legend.position = "none")
+
+
+by_frequency <- group_by(tuango_responded,freq_iq)
+avg_amnt_frequency <- summarize(by_frequency,avg_amnt_frequency_quantile=mean(ordersize))
+visualize(dataset = "avg_amnt_frequency", xvar = "freq_iq", yvar = "avg_amnt_frequency_quantile", type = "bar", custom = TRUE) +  ylab("Amount spent by proportion of buyer = 'yes'") + xlab("Frequency quintiles (freq_iq)") + theme(legend.position = "none")
+
+by_monetary <- group_by(tuango_responded,mon_iq)
+avg_amnt_monetary <- summarize(by_monetary,avg_amnt_monetary_quantile=mean(ordersize))
+visualize(dataset = "avg_amnt_monetary", xvar = "mon_iq", yvar = "avg_amnt_monetary_quantile", type = "bar", custom = TRUE) +  ylab("Amount spent by proportion of buyer = 'yes'") + xlab("Monetary quintiles (mon_iq)") + theme(legend.position = "none")
+```
+
+### Question 6
+While the highest response rate is from quintile 1 for all three -frequency, recency and monetary, the average order size varies highly. The average order size/amount spent is not the highest for quintile 1 in all the three RFM.
+
+### Question 7
+
+Creating RFM indices using Independent quintile approach.
+```{r}
+#7
+tuango$rfm_iq <- paste0(tuango$rec_iq,tuango$freq_iq,tuango$mon_iq)
+```
+Checking if rfm_iq matches with the refm_iq_pre provided in the dataset.
+```{r}
+#check
+sum(tuango$rfm_iq == tuango$rfm_iq_pre)/nrow(tuango)
+```
+
+Creating RFM indices using Sequential quintile approach.
+```{r}
+tuango_sq <- tuango
+tuango_sq <- group_by(tuango_sq, rec_iq) %>% mutate(freq_sq = xtile(frequency, 5, rev = TRUE)) %>% ungroup
+
+## create new variable(s)
+tuango_sq <- group_by(tuango_sq, rec_iq, freq_sq) %>% mutate(mon_sq = xtile(monetary, 5, rev = TRUE)) %>% ungroup
+tuango_sq$rfm_sq <- paste0(tuango$rec_iq,tuango_sq$freq_sq,tuango_sq$mon_sq)
+
+```
+
+
+### Question 7
+Break even response rate is the cost of sending emails/revenue Revenue is the average revenue from each deal - fee given to tuango. Fee given to tuango is 0.5* average amount spent by the customer.
+```{r}
+# Break-even rate
+cost <- 1.6
+Revenue <- 0.5*avg_amnt_spent
+break_even_resp_rate <- cost/Revenue
+break_even_resp_rate
+```
+
+### Question 8
+If we give the deals to all buyers, then the expected number of buyers who will respond is response rate * the total number of people to whom the deals are sent.
+Profit is the revenue from this response rate of people - the cost of sending the promotions to everyone  = 406725.4
+
+Return on marketing is the profit/cost = 0.959
+```{r}
+#8
+expected_no_buyers <- 264841*response_rate
+profit <- expected_no_buyers*Revenue - cost*264841
+profit
+return_on_marketing <- profit/(cost*264841)
+return_on_marketing
+```
+
+
+### Question 9 and 10
+If we send the deals only to the people in cells which have a response rate greater than the break even rate, we can get a higher return on marketing (2.11) and a higher profit (520427).
+```{r}
+#9 & #10
+tuango_sq <- group_by(tuango_sq, rfm_sq) %>% mutate(mailto_sq = mean(buyer == "yes") > break_even_resp_rate) %>% ungroup
+perc_mail = mean(tuango_sq$mailto_sq)
+nr_mail = 264841 * perc_mail
+rep_rate = filter(tuango_sq, mailto_sq == TRUE) %>% summarize(mean(buyer == "yes")) %>% unlist
+nr_resp = nr_mail * rep_rate
+mail_cost = cost * nr_mail
+profit_sq = (Revenue) * nr_resp - mail_cost
+profit_sq
+ROME_sq = profit_sq / mail_cost
+ROME_sq
+```
+
+
+### Question 11
+Since the average amount spent by customers belonging to each cell on the deals will be different across cells, it makes more sense to calculate a separate break even rate for each cell and see if the actual response rate of that cee is greater than the breakeven rate for that cell. 
+
+This results in an even higher profit (595343) and return on marketing (2.15).
+```{r}
+#11
+tuango_sq <- group_by(tuango_sq, rfm_sq) %>% mutate(breakevenrate_per_quint = 0.5*sum(ordersize)/sum(buyer == "yes")) %>% ungroup
+tuango_sq$breakevenrate_per_quint <- 1.6/tuango_sq$breakevenrate_per_quint
+tuango_sq <- group_by(tuango_sq, rfm_sq) %>% mutate(mailto_sq = mean(buyer == "yes") > breakevenrate_per_quint) %>% ungroup
+perc_mail = mean(tuango_sq$mailto_sq,na.rm = TRUE)
+nr_mail = 264841 * perc_mail
+rep_rate = filter(tuango_sq, mailto_sq == TRUE) %>% summarize(mean(buyer == "yes")) %>% unlist
+nr_resp = nr_mail * rep_rate
+mail_cost = cost * nr_mail
+profit_sq = (Revenue) * nr_resp - mail_cost
+profit_sq
+ROME_sq = profit_sq / mail_cost
+ROME_sq
+```
+
+### Question 12
+Since there will be an error in our response rate estimation, we need to calulate a 95% confidence interval for the response rate and then compare it to the breakeven rate. This leads to fewer cells being targeted and hence the cost reduces drastically.
+This leads to almost double the return on marketing but the profits are lower.
+```{r}
+#12
+tuango_sq <- group_by(tuango_sq, rfm_sq) %>% mutate(mailto_csq = (mean(buyer == "yes") - 1.96 * sqrt(mean(buyer == "yes")*(1-mean(buyer=="yes"))/n()))  > breakevenrate_per_quint) %>% ungroup
+perc_mail = mean(tuango_sq$mailto_csq,na.rm = TRUE)
+nr_mail = 264841 * perc_mail
+rep_rate = filter(tuango_sq, mailto_csq == TRUE) %>% summarize(mean(buyer == "yes")) %>% unlist
+nr_resp = nr_mail * rep_rate
+mail_cost = cost * nr_mail
+profit_sq = (Revenue) * nr_resp - mail_cost
+profit_sq
+ROME_sq = profit_sq / mail_cost
+ROME_sq
+```
