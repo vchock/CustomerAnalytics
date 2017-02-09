@@ -1,0 +1,472 @@
+# BBB - Logistic Regression
+
+* Name: Vidya Chockalingam
+* Gitlab id: rsm-vichocka
+* Gitlab username: vichocka
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r}
+## make all required libraries available
+suppressPackageStartupMessages(library(radiant))
+library(dplyr)
+#install.packages("caret")
+library(caret)
+## finding the path to the class dropbox folder
+fp <- file.path(find_dropbox(),"MGTA455-2017")
+
+## loading the data
+## DO NOT change the next line!
+## Data must be loaded from Dropbox/MGTA455-2017/data
+loadr(file.path(fp, "data/bbb.rda"))
+```
+
+## Question answers
+### Part 1
+Building a logistic regression model with buyer as the dependent variable and gender, last, total etc. as the independent variables.
+```{r}
+#Part 1
+#1
+bbb$buyer_int <- ifelse(bbb$buyer == "yes",1 ,0) 
+response_rate <- sum(bbb$buyer_int)/nrow(bbb)
+model <- glm(buyer_int ~ gender + last + total + child + youth + cook + do_it +reference + art + geog,family=binomial(link='logit'),data=bbb)
+bbb$purch_prob <- predict(model, newdata = bbb, type = "response")
+```
+
+All the p values are <0.05 and hence with a 95% confidence interval we can reject the null hypothesis of having the coefficients of the independent variables to be 0.
+```{r}
+#2
+summary(model)
+```
+
+### Part 2
+Splitting the data into deciles based on the predicted scores of the logit model.
+```{r}
+# Part 2
+#1
+bbb$prob_dec <-  xtile(bbb$purch_prob, 10, rev=TRUE)
+by_decile <- group_by(bbb,prob_dec)
+avg_score <- summarize(by_decile,avg_score=mean(purch_prob))
+```
+
+Plotting the response rate across deciles - making sure that the highest response rate is in the first decile.
+```{r}
+#2
+visualize(dataset = "bbb", xvar = "prob_dec", yvar = "buyer_int", type = "bar", custom = TRUE) +  ylab("Proportion of buyer = 'yes'") + xlab("Deciles (freq_iq)") + theme(legend.position = "none")
+```
+
+Storing the response rate across deciles in a table.
+```{r}
+#3
+no.of.customers <- summarize(by_decile,customer_count=n())
+no.of.customers.bought <- summarize(by_decile,customer_count_yes=sum(buyer_int))
+response.rate <- summarize(by_decile,response_rate=sum(buyer_int)/n())
+```
+
+Creating another glm model with child as the only independent variable.
+```{r}
+#4
+model1 <- glm(buyer_int ~ child ,family=binomial(link='logit'),data=bbb)
+summary(model1)
+```
+
+Creating Lift and Gain charts for the logit model.
+```{r}
+# Part 3
+#1
+lift_table <- cbind(no.of.customers,no.of.customers.bought,response.rate)
+lift_table <- lift_table[,c(-3,-5)]
+for(i in 1:nrow(lift_table))
+{
+  if(i==1)
+    {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")]
+  }
+  else
+  {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")] + lift_table$cum_cust_count[i-1]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")] + lift_table$cum_buyer_count[i-1]
+  }
+}
+lift_table$cum_prop <- lift_table$cum_cust_count/nrow(bbb)
+lift_table$lift <- lift_table$response_rate/response_rate
+lift_table$cum_resp_rate <- lift_table$cum_buyer_count/lift_table$cum_cust_count
+lift_table$cum_lift <- lift_table$cum_resp_rate/response_rate
+#2
+visualize(dataset = "lift_table", xvar = "cum_prop", yvar = "cum_lift", type = "line", custom = TRUE) +  ylab("Cumulative Lift") + xlab("Proportion of customers") + theme(legend.position = "none")
+```
+Gain Chart
+```{r}
+#3
+gain_table <- lift_table
+gain_table$buyer_prop <- gain_table$customer_count_yes/sum(gain_table$customer_count_yes)
+for(i in 1:nrow(gain_table))
+{
+  if(i==1)
+    {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")]
+  }
+  else
+  {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")] + gain_table$cum_buyer_prop[i-1]
+  }
+}
+#4
+visualize(dataset = "gain_table", xvar = "cum_prop", yvar = "cum_buyer_prop", type = "line", custom = TRUE) +   geom_segment(aes(x = min(cum_prop), y = min(cum_buyer_prop), xend = max(cum_prop), yend = max(cum_buyer_prop), colour = "segment"), data = gain_table) + ylab("Cumulative Gain") + xlab("Proportion of customers") + theme(legend.position = "none")
+```
+
+### Part 4
+Creating the Profit and ROME curve using the predictions by the logit model.
+```{r}
+#Part 4
+mail <- 0.50
+price <- 9
+shipping <- 3
+selling_price <- 18
+#1
+lift_table$profit <- (selling_price-price-shipping)*lift_table$customer_count_yes - mail*lift_table$customer_count
+lift_table$ROME <- lift_table$profit/(mail*lift_table$customer_count)
+#2
+ggplot(lift_table,aes(x=prob_dec,y=profit,group=1)) + geom_line() 
+#3
+ggplot(lift_table,aes(x=prob_dec,y=ROME,group=1)) + geom_line() 
+```
+
+Creating the confusion matrix for the above model.
+```{r}
+#4
+bbb$prediction <- ifelse(bbb$purch_prob>=0.5, 1, 0)
+confusion_table <- table(bbb$prediction,bbb$buyer_int)
+print(confusion_table)
+confusion_matrix <- confusionMatrix(confusion_table)
+confusion_matrix$overall['Accuracy']
+```
+
+### Part 5
+Calculating the expected number of buyers, reponse rate of the responders, profit and ROME if we target only the customers who have a purchase probability > break even rate.
+```{r}
+#Part 5
+#1
+break_even_rate <- mail/(selling_price - shipping - price)
+#2
+bbb$mailto_logit <- ifelse(bbb$purch_prob>break_even_rate,1,0)
+#3
+no.of.customers.to.target <- mean(bbb$mailto_logit)
+no.of.customers <- 500000 * no.of.customers.to.target
+print(paste("Targeted Customers ",no.of.customers))
+bbb_responders <- bbb[bbb$mailto_logit == 1,]
+response_rate_responders <- sum(bbb_responders$buyer_int)/nrow(bbb_responders)
+print(paste("Response Rate of the Responders ",response_rate_responders))
+expected.buyers <- round(no.of.customers * response_rate_responders)
+print(paste("Expected number of buyers ",expected.buyers))
+#4
+profit <- (selling_price-shipping-price)*expected.buyers - mail*no.of.customers
+print(paste("Profit if we target only the customers with purchase probability > break even rate is $",profit))
+ROME_targeted <- profit/(mail*no.of.customers)
+ROME_targeted
+```
+## Logistic Regression Accounting for Standard Error
+
+If we predict logistic regression accounting for standard error in the prediction of the parameters, then we find that there is not much variation in the ROME, accuracy and profit.
+```{r}
+#5 Logistic with Error
+loadr(file.path(fp, "data/bbb.rda"))
+bbb_ler <- bbb
+bbb_ler$buyer_int <- ifelse(bbb_ler$buyer == "yes",1 ,0) 
+bbb_ler$purch_prob <- predict(model, newdata = bbb_ler, type = "response",se = TRUE)$fit - predict(model, newdata = bbb_ler, type = "response",se = TRUE)$se.fit
+bbb_ler$prob_dec <-  xtile(bbb_ler$purch_prob, 10, rev=TRUE)
+
+by_decile <- group_by(bbb_ler,prob_dec)
+no.of.customers <- summarize(by_decile,customer_count=n())
+no.of.customers.bought <- summarize(by_decile,customer_count_yes=sum(buyer_int))
+response.rate <- summarize(by_decile,response_rate=sum(buyer_int)/n())
+```
+
+Lift and Gains Table for Logistic regression with standard error.
+```{r}
+# Part 3
+#1
+lift_table <- cbind(no.of.customers,no.of.customers.bought,response.rate)
+lift_table <- lift_table[,c(-3,-5)]
+for(i in 1:nrow(lift_table))
+{
+  if(i==1)
+    {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")]
+  }
+  else
+  {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")] + lift_table$cum_cust_count[i-1]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")] + lift_table$cum_buyer_count[i-1]
+  }
+}
+lift_table$cum_prop <- lift_table$cum_cust_count/nrow(bbb)
+lift_table$lift <- lift_table$response_rate/response_rate
+lift_table$cum_resp_rate <- lift_table$cum_buyer_count/lift_table$cum_cust_count
+lift_table$cum_lift <- lift_table$cum_resp_rate/response_rate
+#2
+visualize(dataset = "lift_table", xvar = "cum_prop", yvar = "cum_lift", type = "line", custom = TRUE) +  ylab("Cumulative Lift") + xlab("Proportion of customers") + theme(legend.position = "none")
+
+#3
+gain_table <- lift_table
+gain_table$buyer_prop <- gain_table$customer_count_yes/sum(gain_table$customer_count_yes)
+for(i in 1:nrow(gain_table))
+{
+  if(i==1)
+    {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")]
+  }
+  else
+  {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")] + gain_table$cum_buyer_prop[i-1]
+  }
+}
+#4
+visualize(dataset = "gain_table", xvar = "cum_prop", yvar = "cum_buyer_prop", type = "line", custom = TRUE) +   geom_segment(aes(x = min(cum_prop), y = min(cum_buyer_prop), xend = max(cum_prop), yend = max(cum_buyer_prop), colour = "segment"), data = gain_table) + ylab("Cumulative Gain") + xlab("Proportion of customers") + theme(legend.position = "none")
+```
+
+Profit and ROME curve for Logistic Regression with Standard Error
+```{r}
+#Part 4
+#1
+lift_table$profit <- (selling_price-price-shipping)*lift_table$customer_count_yes - mail*lift_table$customer_count
+lift_table$ROME <- lift_table$profit/(mail*lift_table$customer_count)
+#2
+ggplot(lift_table,aes(x=prob_dec,y=profit,group=1)) + geom_line() 
+#3
+ggplot(lift_table,aes(x=prob_dec,y=ROME,group=1)) + geom_line() 
+```
+
+Accuracy for this model.
+```{r}
+#4
+bbb_ler$prediction <- ifelse(bbb_ler$purch_prob>=0.5, 1, 0)
+confusion_table <- table(bbb_ler$prediction,bbb_ler$buyer_int)
+print(confusion_table)
+confusion_matrix <- confusionMatrix(confusion_table)
+confusion_matrix$overall['Accuracy']
+```
+
+```{r}
+#2
+bbb_ler$mailto_logit <- ifelse(bbb_ler$purch_prob>break_even_rate,1,0)
+#3
+no.of.customers.to.target <- mean(bbb_ler$mailto_logit)
+no.of.customers <- 500000 * no.of.customers.to.target
+print(paste("Number of customers to target", no.of.customers))
+bbb_responders <- bbb_ler[bbb_ler$mailto_logit == 1,]
+response_rate_responders <- sum(bbb_responders$buyer_int)/nrow(bbb_responders)
+print(paste("Response rate expected",response_rate_responders))
+expected.buyers <- round(no.of.customers * response_rate_responders)
+print(paste("Expected Number of Buyers",expected.buyers))
+
+#4
+profit <- (selling_price-shipping-price)*expected.buyers - mail*no.of.customers
+ROME_targeted <- profit/(mail*no.of.customers)
+print(paste("Profit if we target only the customers with purchase probability > break even rate is $",profit))
+print(paste("ROME for these targeted customers",ROME_targeted))
+
+```
+
+## Sequential RFM
+
+Creating quintiles based on the recency(last), frequency(purch), monetary(total) values of the dataset.
+```{r}
+# Sequential RFM
+bbb_sq <- bbb
+bbb_sq$buyer_int <- ifelse(bbb$buyer == "yes",1 ,0) 
+response_rate <- sum(bbb_sq$buyer_int)/nrow(bbb_sq)
+bbb_sq$rec_iq <-  xtile(bbb_sq$last, 5)
+bbb_sq <- group_by(bbb_sq, rec_iq) %>% mutate(freq_sq = xtile(purch, 5, rev = TRUE)) %>% ungroup
+
+## create new variable(s)
+bbb_sq <- group_by(bbb_sq, rec_iq, freq_sq) %>% mutate(mon_sq = xtile(total, 5, rev = TRUE)) %>% ungroup
+bbb_sq$rfm_sq <- paste0(bbb_sq$rec_iq,bbb_sq$freq_sq,bbb_sq$mon_sq)
+
+```
+
+Finding the profit and ROME of the customers in the cells which has a response rate > break even rate.
+```{r}
+bbb_sq <- group_by(bbb_sq, rfm_sq) %>% mutate(mailto_sq = mean(buyer == "yes") > break_even_rate) %>% ungroup
+perc_mail = mean(bbb_sq$mailto_sq)
+nr_mail = 500000 * perc_mail
+rep_rate = filter(bbb_sq, mailto_sq == TRUE) %>% summarize(mean(buyer == "yes")) %>% unlist
+nr_resp = nr_mail * rep_rate
+mail_cost = mail * nr_mail
+profit_sq = (selling_price-shipping-price) * nr_resp - mail_cost
+print(paste("Profit if we target only the customers with purchase probability > break even rate is $",profit_sq))
+ROME_sq = profit_sq / mail_cost
+print(paste("ROME ",ROME_sq))
+```
+
+Creating Lift and Gain Charts for Sequential RFM based on the response rate per rfm cell.
+```{r}
+bbb_sq <- group_by(bbb_sq, rfm_sq) %>% mutate(response_rate = mean(buyer == "yes")) %>% ungroup %>% mutate(prob_dec = xtile(response_rate,10, rev=TRUE)) %>% ungroup
+by_decile <- group_by(bbb_sq,prob_dec)
+no.of.customers <- summarize(by_decile,customer_count=n())
+no.of.customers.bought <- summarize(by_decile,customer_count_yes=sum(buyer_int))
+response.rate <- summarize(by_decile,response_rate=sum(buyer_int)/n())
+lift_table <- cbind(no.of.customers,no.of.customers.bought,response.rate)
+lift_table <- lift_table[,c(-3,-5)]
+for(i in 1:nrow(lift_table))
+{
+  if(i==1)
+    {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")]
+  }
+  else
+  {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")] + lift_table$cum_cust_count[i-1]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")] + lift_table$cum_buyer_count[i-1]
+  }
+}
+lift_table$cum_prop <- lift_table$cum_cust_count/nrow(bbb)
+lift_table$lift <- lift_table$response_rate/response_rate
+lift_table$cum_resp_rate <- lift_table$cum_buyer_count/lift_table$cum_cust_count
+lift_table$cum_lift <- lift_table$cum_resp_rate/response_rate
+#2
+visualize(dataset = "lift_table", xvar = "cum_prop", yvar = "cum_lift", type = "line", custom = TRUE) +  ylab("Cumulative Lift") + xlab("Proportion of customers") + theme(legend.position = "none")
+#3
+gain_table <- lift_table
+gain_table$buyer_prop <- gain_table$customer_count_yes/sum(gain_table$customer_count_yes)
+for(i in 1:nrow(gain_table))
+{
+  if(i==1)
+    {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")]
+  }
+  else
+  {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")] + gain_table$cum_buyer_prop[i-1]
+  }
+}
+visualize(dataset = "gain_table", xvar = "cum_prop", yvar = "cum_buyer_prop", type = "line", custom = TRUE) +geom_segment(aes(x = min(cum_prop), y = min(cum_buyer_prop), xend = max(cum_prop), yend = max(cum_buyer_prop), colour = "segment"), data = gain_table) +  ylab("Cumulative Gain") + xlab("Proportion of customers") + theme(legend.position = "none")
+```
+
+Creating Profit and ROME curves for sequential RFM.
+```{r}
+lift_table$profit <- (selling_price-price-shipping)*lift_table$customer_count_yes - mail*lift_table$customer_count
+lift_table$ROME <- lift_table$profit/(mail*lift_table$customer_count)
+#2
+ggplot(lift_table,aes(x=prob_dec,y=profit,group=1)) + geom_line() 
+#3
+ggplot(lift_table,aes(x=prob_dec,y=ROME,group=1)) + geom_line() 
+```
+
+Confusion Matrix and Accuracy for sequential RFM is calculated by taking the prediction scores for all the customers in a RFM cell with response rate > break even rate as 1. Then we compare it with the actual response rate of the customers in those cells.
+```{r}
+#Confusion matrix
+bbb_sq$buyer_int <- ifelse(bbb_sq$buyer == "yes",1 ,0) 
+bbb_sq$mailto_sq <- ifelse(bbb_sq$mailto_sq == 1, 1, 0)
+confusion_table <- table(bbb_sq$mailto_sq,bbb_sq$buyer_int)
+print(confusion_table)
+confusion_matrix <- confusionMatrix(confusion_table)
+confusion_matrix$overall['Accuracy']
+```
+
+## Naive Bayes
+Calculating predictions based on Naive Bayes Model.
+```{r}
+## Naive Bayes
+bbb_nb <- bbb
+bbb_nb$buyer_int <- ifelse(bbb_nb$buyer == "yes",1 ,0) 
+response_rate <- sum(bbb_nb$buyer_int)/nrow(bbb_nb)
+levels(bbb_nb$buyer) <- c(0,1)
+nb_model <- nb(dataset = "bbb_nb",rvar = "buyer", evar = c("gender","last","total","child","youth","cook","do_it", "reference", "art", "geog"))
+bbb_nb$purch_prob <- predict(nb_model, pred_data  = "bbb_nb")[,"0"]
+```
+
+Plotting Lift and Gain Charts for Naive Bayes
+```{r}
+# Part 2
+#1
+bbb_nb$prob_dec <-  xtile(bbb_nb$purch_prob, 10, rev=TRUE)
+by_decile <- group_by(bbb_nb,prob_dec)
+no.of.customers <- summarize(by_decile,customer_count=n())
+no.of.customers.bought <- summarize(by_decile,customer_count_yes=sum(buyer_int))
+response.rate <- summarize(by_decile,response_rate=sum(buyer_int)/n())
+lift_table <- cbind(no.of.customers,no.of.customers.bought,response.rate)
+lift_table <- lift_table[,c(-3,-5)]
+for(i in 1:nrow(lift_table))
+{
+  if(i==1)
+    {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")]
+  }
+  else
+  {
+    lift_table$cum_cust_count[i] <- lift_table[i,c("customer_count")] + lift_table$cum_cust_count[i-1]
+    lift_table$cum_buyer_count[i] <- lift_table[i,c("customer_count_yes")] + lift_table$cum_buyer_count[i-1]
+  }
+}
+lift_table$cum_prop <- lift_table$cum_cust_count/nrow(bbb)
+lift_table$lift <- lift_table$response_rate/response_rate
+lift_table$cum_resp_rate <- lift_table$cum_buyer_count/lift_table$cum_cust_count
+lift_table$cum_lift <- lift_table$cum_resp_rate/response_rate
+#2
+visualize(dataset = "lift_table", xvar = "cum_prop", yvar = "cum_lift", type = "line", custom = TRUE) +  ylab("Cumulative Lift") + xlab("Proportion of customers") + theme(legend.position = "none")
+
+#3
+gain_table <- lift_table
+gain_table$buyer_prop <- gain_table$customer_count_yes/sum(gain_table$customer_count_yes)
+for(i in 1:nrow(gain_table))
+{
+  if(i==1)
+    {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")]
+  }
+  else
+  {
+    gain_table$cum_buyer_prop[i] <- gain_table[i,c("buyer_prop")] + gain_table$cum_buyer_prop[i-1]
+  }
+}
+#4
+visualize(dataset = "gain_table", xvar = "cum_prop", yvar = "cum_buyer_prop", type = "line", custom = TRUE) +   geom_segment(aes(x = min(cum_prop), y = min(cum_buyer_prop), xend = max(cum_prop), yend = max(cum_buyer_prop), colour = "segment"), data = gain_table) + ylab("Cumulative Gain") + xlab("Proportion of customers") + theme(legend.position = "none")
+```
+
+Plotting ROME and Profit curves across deciles in Naive Bayes.
+```{r}
+#1
+lift_table$profit <- (selling_price-price-shipping)*lift_table$customer_count_yes - mail*lift_table$customer_count
+lift_table$ROME <- lift_table$profit/(mail*lift_table$customer_count)
+#2
+ggplot(lift_table,aes(x=prob_dec,y=profit,group=1)) + geom_line() 
+#3
+ggplot(lift_table,aes(x=prob_dec,y=ROME,group=1)) + geom_line() 
+```
+
+Creating the confusion matrix and accuracy using Naive Bayes Model.
+```{r}
+#4
+bbb_nb$prediction <- ifelse(bbb_nb$purch_prob>=0.5, 1, 0)
+confusion_table <- table(bbb_nb$prediction,bbb_nb$buyer_int)
+print(confusion_table)
+confusion_matrix <- confusionMatrix(confusion_table)
+confusion_matrix$overall['Accuracy']
+```
+
+Calculating the profit and ROME using Naive Bayes.
+```{r}
+bbb_nb$mailto_logit <- ifelse(bbb_nb$purch_prob>break_even_rate,1,0)
+#3
+no.of.customers.to.target <- mean(bbb_nb$mailto_logit)
+no.of.customers <- 500000 * no.of.customers.to.target
+bbb_responders <- bbb_nb[bbb_nb$mailto_logit == 1,]
+response_rate_responders <- sum(bbb_responders$buyer_int)/nrow(bbb_responders)
+expected.buyers <- round(no.of.customers * response_rate_responders)
+
+#4
+profit <- (selling_price-shipping-price)*expected.buyers - mail*no.of.customers
+ROME_targeted <- profit/(mail*no.of.customers)
+print(paste("Profit is $", profit))
+ROME_targeted
+print(paste("ROME", ROME_targeted))
+```
